@@ -1,8 +1,10 @@
 import pika
-from pika.exceptions import DuplicateConsumerTag, ReentrancyError
+from pika.exceptions import DuplicateConsumerTag, ReentrancyError, ChannelClosed, ChannelClosedByBroker, \
+    ConnectionClosedByBroker, AMQPConnectionError, StreamLostError, NackError, UnroutableError, ChannelWrongStateError
 import random
 import string
-from .middleware import MessageMiddlewareQueue, MessageMiddlewareExchange, MessageMiddlewareMessageError
+from .middleware import MessageMiddlewareQueue, MessageMiddlewareExchange, MessageMiddlewareMessageError, \
+    MessageMiddlewareDisconnectedError, MessageMiddlewareCloseError
 
 
 class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
@@ -41,24 +43,34 @@ class MessageMiddlewareQueueRabbitMQ(MessageMiddlewareQueue):
         try:
             self.channel.basic_consume(queue=self.queue_name, on_message_callback=pika_callback, auto_ack=False)
             self.channel.start_consuming()
-        except DuplicateConsumerTag:
-            raise MessageMiddlewareMessageError
-        except ReentrancyError:
-            raise MessageMiddlewareMessageError
-        
-
+        except ChannelClosed as e:
+            raise MessageMiddlewareDisconnectedError(str(e))
+        except Exception as e:
+            raise MessageMiddlewareMessageError(str(e))
         return
 
     def stop_consuming(self):
         self.channel.stop_consuming()
-        pass
+        try:
+            self.channel.stop_consuming()
+        except Exception as e:
+            raise MessageMiddlewareDisconnectedError(str(e))
+        return
 
     def send(self, message):
-        self.channel.basic_publish(exchange='', routing_key=self.queue_name, body=message)
+        try:
+            self.channel.basic_publish(exchange='', routing_key=self.queue_name, body=message)
+        except(AMQPConnectionError, StreamLostError, ChannelClosed, ChannelClosedByBroker, ConnectionClosedByBroker, ChannelWrongStateError) as e:
+            raise MessageMiddlewareDisconnectedError(str(e))
+        except Exception as e:
+            raise MessageMiddlewareMessageError(str(e))
         return
 
     def close(self):
-        self.connection.close()
+        try:
+            self.connection.close()
+        except Exception as e:
+            raise MessageMiddlewareCloseError(str(e))
         return
 
 class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
@@ -81,19 +93,36 @@ class MessageMiddlewareExchangeRabbitMQ(MessageMiddlewareExchange):
             on_message_callback(body, ack, nack)
         result = self.channel.queue_declare(queue="",exclusive=True,auto_delete=True)
         self.queue_name = result.method.queue
-        for routing_key in self.routing_keys:
-            self.channel.queue_bind(exchange=self.exchange_name,queue=self.queue_name,routing_key=routing_key)
-            self.channel.basic_consume(queue=self.queue_name, on_message_callback=pika_callback, auto_ack=False)
-        self.channel.start_consuming()
+        try:
+            for routing_key in self.routing_keys:
+                self.channel.queue_bind(exchange=self.exchange_name,queue=self.queue_name,routing_key=routing_key)
+                self.channel.basic_consume(queue=self.queue_name, on_message_callback=pika_callback, auto_ack=False)
+            self.channel.start_consuming()
+        except ChannelClosed as e:
+            raise MessageMiddlewareDisconnectedError(str(e))
+        except Exception as e:
+            raise MessageMiddlewareMessageError(str(e))
         return
 
     def stop_consuming(self):
-        self.channel.stop_consuming()
+        try:
+            self.channel.stop_consuming()
+        except Exception as e:
+            raise MessageMiddlewareDisconnectedError(str(e))
         return
 
     def send(self, message):
-        self.channel.basic_publish(exchange=self.exchange_name, routing_key=self.routing_keys[0], body=message)
+        try:
+            self.channel.basic_publish(exchange=self.exchange_name, routing_key=self.routing_keys[0], body=message)
+        except(AMQPConnectionError, StreamLostError, ChannelClosed, ChannelClosedByBroker, ConnectionClosedByBroker,ChannelWrongStateError) as e:
+            raise MessageMiddlewareDisconnectedError(str(e))
+        except Exception as e:
+            raise MessageMiddlewareMessageError(str(e))
+        return
 
     def close(self):
-        self.connection.close()
+        try:
+            self.connection.close()
+        except Exception as e:
+            raise MessageMiddlewareCloseError(str(e))
         return
